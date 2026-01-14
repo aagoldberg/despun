@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
+    "@neondatabase/serverless": "^1.0.2",
     "next": "16.1.1",
     "postgres": "^3.4.8",
     "react": "19.2.3",
