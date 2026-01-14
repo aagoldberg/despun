@@ -290,6 +290,17 @@ export function trackNewsletterSignup(source: string): void {
   });
 }
 
+/**
+ * Track share event.
+ */
+export function trackShare(storyId: string, platform: string, success: boolean): void {
+  sendEvent({
+    event_type: "share",
+    story_id: storyId,
+    metadata: { platform, success },
+  });
+}
+
 // ============================================================================
 // SCROLL DEPTH TRACKING
 // ============================================================================

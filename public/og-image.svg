@@ -1,0 +1,24 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#09090B"/>
+
+  <!-- Logo mark -->
+  <rect x="540" y="200" width="40" height="40" rx="6" fill="#18181B"/>
+
+  <!-- Title -->
+  <text x="600" y="300" font-family="system-ui, -apple-system, sans-serif" font-size="72" font-weight="bold" fill="white" text-anchor="middle">Despun</text>
+
+  <!-- Tagline -->
+  <text x="600" y="360" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#71717A" text-anchor="middle">News Without the Spin</text>
+
+  <!-- Description -->
+  <text x="600" y="430" font-family="system-ui, -apple-system, sans-serif" font-size="20" fill="#52525B" text-anchor="middle">What actually happened. Minus the spin.</text>
+
+  <!-- Bias spectrum bar -->
+  <rect x="450" y="480" width="100" height="8" rx="4" fill="#3B82F6"/>
+  <rect x="550" y="480" width="100" height="8" rx="4" fill="#71717A"/>
+  <rect x="650" y="480" width="100" height="8" rx="4" fill="#F43F5E"/>
+
+  <!-- Daily Briefing badge -->
+  <rect x="500" y="520" width="200" height="30" rx="15" fill="#1E1B4B" fill-opacity="0.5"/>
+  <text x="600" y="541" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="bold" fill="#818CF8" text-anchor="middle" letter-spacing="2">DAILY BRIEFING</text>
+</svg>

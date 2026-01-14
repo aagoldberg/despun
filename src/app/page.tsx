@@ -7,7 +7,16 @@ import {
   trackStoryView,
   trackStoryExpand,
   trackSourceClick,
+  trackShare,
 } from "@/lib/tracking";
+import { getStoryReadingTime } from "@/lib/utils";
+import { checkReferral } from "@/lib/referral";
+import ShareButton from "@/components/ShareButton";
+import BookmarkButton from "@/components/BookmarkButton";
+import ThemeToggle from "@/components/ThemeToggle";
+import NewsletterSignup from "@/components/NewsletterSignup";
+import { SearchButton, default as SearchDialog } from "@/components/SearchDialog";
+import { StoriesListSkeleton } from "@/components/Skeleton";
 
 // --- Types ---
 
@@ -407,6 +416,7 @@ function DeeperAnalysisBox({ deeperAnalysis }: { deeperAnalysis?: DeeperAnalysis
 
 function StoryCard({ story }: { story: StoryCluster }) {
   const [expanded, setExpanded] = useState(false);
+  const readingTime = getStoryReadingTime(story);
 
   const leftPerspective = story.perspectives.find(p => p.lean.toLowerCase().includes("left"));
   const rightPerspective = story.perspectives.find(p => p.lean.toLowerCase().includes("right"));
@@ -427,6 +437,10 @@ function StoryCard({ story }: { story: StoryCluster }) {
     trackSourceClick(story.id, sourceName, url);
   };
 
+  const handleShare = (platform: string, success: boolean) => {
+    trackShare(story.id, platform, success);
+  };
+
   return (
     <article className="bg-white dark:bg-zinc-950 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
 
@@ -436,8 +450,18 @@ function StoryCard({ story }: { story: StoryCluster }) {
           <span className="px-2 py-0.5 bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded text-[10px] font-bold uppercase tracking-widest">
             {story.debateType || "Top Story"}
           </span>
+          <span className="text-xs text-zinc-400">{readingTime} min read</span>
         </div>
-        <BiasSpectrum sources={story.sources} />
+        <div className="flex items-center gap-2">
+          <BiasSpectrum sources={story.sources} />
+          <BookmarkButton story={story} />
+          <ShareButton
+            storyId={story.id}
+            title={story.topic}
+            summary={story.whatHappened}
+            onShare={handleShare}
+          />
+        </div>
       </div>
 
       <div className="p-6 md:p-8 space-y-8">
@@ -643,10 +667,12 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
 
-  // Initialize analytics tracking
+  // Initialize analytics tracking and check referral
   useEffect(() => {
     const cleanup = initTracking();
+    checkReferral(); // Track if user came from referral link
     return cleanup;
   }, []);
 
@@ -673,6 +699,13 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100 font-sans selection:bg-indigo-100 dark:selection:bg-indigo-900">
 
+      {/* Search Dialog */}
+      <SearchDialog
+        stories={stories}
+        isOpen={searchOpen}
+        onClose={() => setSearchOpen(false)}
+      />
+
       {/* Navigation */}
       <nav className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -680,13 +713,20 @@ export default function Home() {
             <div className="w-5 h-5 bg-zinc-900 dark:bg-zinc-100 rounded-sm group-hover:rotate-12 transition-transform" />
             <span className="font-bold text-lg tracking-tight">Despun</span>
           </Link>
-          <div className="flex gap-6 text-sm font-medium">
-            <Link href="/methodology" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
-              Methodology
-            </Link>
-            <Link href="/about" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
-              About
-            </Link>
+          <div className="flex items-center gap-4">
+            <SearchButton onClick={() => setSearchOpen(true)} />
+            <div className="hidden sm:flex gap-4 text-sm font-medium">
+              <Link href="/saved" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
+                Saved
+              </Link>
+              <Link href="/methodology" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
+                Methodology
+              </Link>
+              <Link href="/about" className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
+                About
+              </Link>
+            </div>
+            <ThemeToggle />
           </div>
         </div>
       </nav>
@@ -722,7 +762,7 @@ export default function Home() {
       {/* Main Grid */}
       <main className="max-w-4xl mx-auto px-4 py-16">
 
-        {loading && <LoadingState />}
+        {loading && <StoriesListSkeleton count={2} />}
 
         {error && (
           <div className="text-center py-20 bg-rose-50 dark:bg-rose-900/10 rounded-3xl border border-rose-100 dark:border-rose-900/20">
@@ -746,11 +786,16 @@ export default function Home() {
         )}
 
         {!loading && !error && stories.length > 0 && (
-          <div className="space-y-16">
-            {stories.map((story) => (
-              <StoryCard key={story.id} story={story} />
-            ))}
-          </div>
+          <>
+            <div className="space-y-16">
+              {stories.map((story) => (
+                <StoryCard key={story.id} story={story} />
+              ))}
+            </div>
+
+            {/* Newsletter Signup after stories */}
+            <NewsletterSignup source="homepage" className="mt-16" />
+          </>
         )}
 
         {/* Archived Briefings - filtered to exclude topics already covered */}
@@ -804,8 +849,15 @@ export default function Home() {
                 Despun • Analyzing 50+ Global Outlets
             </p>
             <div className="flex justify-center gap-6">
+                <Link href="/saved" className="text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">Saved</Link>
                 <Link href="/methodology" className="text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">Methodology</Link>
                 <Link href="/about" className="text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">About</Link>
+                <a href="/feed.xml" className="text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 flex items-center gap-1">
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6.18 15.64a2.18 2.18 0 1 1 0 4.36 2.18 2.18 0 0 1 0-4.36m12.64 4.36A14.79 14.79 0 0 0 4 5.18V9a10.97 10.97 0 0 1 10.97 10.97h4.85M4 12.28v3.72a7.24 7.24 0 0 1 7.24 7.24h3.72A10.97 10.97 0 0 0 4 12.28z"/>
+                  </svg>
+                  RSS
+                </a>
             </div>
         </footer>
 

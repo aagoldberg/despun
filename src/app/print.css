@@ -1,0 +1,139 @@
+/* Print Stylesheet for Despun */
+
+@media print {
+  /* Hide navigation and interactive elements */
+  nav,
+  footer,
+  button,
+  .no-print,
+  [role="button"],
+  [aria-label="Share"],
+  [aria-label="Save for later"],
+  .animate-pulse {
+    display: none !important;
+  }
+
+  /* Reset colors for printing */
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 12pt;
+    line-height: 1.5;
+  }
+
+  /* Article styling */
+  article {
+    border: none !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Headlines */
+  h1, h2, h3, h4, h5, h6 {
+    color: black !important;
+    page-break-after: avoid;
+  }
+
+  h1 {
+    font-size: 24pt;
+    margin-bottom: 12pt;
+  }
+
+  h2 {
+    font-size: 18pt;
+    margin-top: 18pt;
+    margin-bottom: 8pt;
+  }
+
+  /* Paragraphs */
+  p {
+    color: #333 !important;
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* Links - show URL in print */
+  a {
+    color: black !important;
+    text-decoration: underline !important;
+  }
+
+  a[href]:after {
+    content: " (" attr(href) ")";
+    font-size: 9pt;
+    color: #666;
+  }
+
+  /* Don't show URL for internal links */
+  a[href^="/"]:after,
+  a[href^="#"]:after {
+    content: "";
+  }
+
+  /* Cards and boxes */
+  .bg-zinc-50,
+  .bg-white,
+  .bg-indigo-50,
+  .bg-amber-50 {
+    background: #f5f5f5 !important;
+    border: 1px solid #ddd !important;
+    padding: 12pt !important;
+    margin: 12pt 0 !important;
+  }
+
+  /* Bias badges */
+  .text-blue-600,
+  .text-blue-700 {
+    color: #0066cc !important;
+  }
+
+  .text-rose-600,
+  .text-rose-700 {
+    color: #cc0033 !important;
+  }
+
+  /* Grid layouts - stack on print */
+  .grid {
+    display: block !important;
+  }
+
+  .grid > * {
+    margin-bottom: 12pt;
+  }
+
+  /* Source list */
+  .grid-cols-3 > * {
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 8pt;
+    margin-bottom: 8pt;
+  }
+
+  /* Page breaks */
+  section {
+    page-break-inside: avoid;
+  }
+
+  /* Header info */
+  .text-\[10px\] {
+    font-size: 8pt !important;
+  }
+
+  /* Hide dark mode elements */
+  .dark\:* {
+    display: initial;
+  }
+
+  /* Add print header */
+  @page {
+    margin: 1in;
+    @top-center {
+      content: "Despun - News Without the Spin";
+    }
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+    }
+  }
+}
