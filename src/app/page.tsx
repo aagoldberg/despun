@@ -2,6 +2,12 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import {
+  initTracking,
+  trackStoryView,
+  trackStoryExpand,
+  trackSourceClick,
+} from "@/lib/tracking";
 
 // --- Types ---
 
@@ -405,6 +411,22 @@ function StoryCard({ story }: { story: StoryCluster }) {
   const leftPerspective = story.perspectives.find(p => p.lean.toLowerCase().includes("left"));
   const rightPerspective = story.perspectives.find(p => p.lean.toLowerCase().includes("right"));
 
+  // Track story view on mount
+  useEffect(() => {
+    trackStoryView(story.id, story.topic);
+  }, [story.id, story.topic]);
+
+  const handleExpand = () => {
+    if (!expanded) {
+      trackStoryExpand(story.id, story.topic);
+    }
+    setExpanded(!expanded);
+  };
+
+  const handleSourceClick = (sourceName: string, url: string) => {
+    trackSourceClick(story.id, sourceName, url);
+  };
+
   return (
     <article className="bg-white dark:bg-zinc-950 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
 
@@ -464,7 +486,7 @@ function StoryCard({ story }: { story: StoryCluster }) {
 
       {/* Expand Bar */}
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleExpand}
         className="w-full py-4 px-6 bg-zinc-50/50 dark:bg-zinc-900/50 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between group hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
       >
         <div className="flex items-center gap-4">
@@ -540,6 +562,7 @@ function StoryCard({ story }: { story: StoryCluster }) {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="block"
+                                onClick={() => handleSourceClick(source.name, source.url)}
                             >
                                 <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mb-2 group-hover/source:text-indigo-600 dark:group-hover/source:text-indigo-400">
                                     {source.title}
@@ -620,6 +643,12 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+
+  // Initialize analytics tracking
+  useEffect(() => {
+    const cleanup = initTracking();
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     fetch("/api/clearview")
