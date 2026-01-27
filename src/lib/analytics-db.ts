@@ -1234,6 +1234,96 @@ export async function getABTests(): Promise<ABTest[]> {
   }
 }
 
+export async function updateABTestStatus(
+  testId: number,
+  status: "draft" | "running" | "paused" | "completed",
+  winnerVariant?: string
+): Promise<boolean> {
+  try {
+    const updates: Record<string, unknown> = { status };
+
+    if (status === "running") {
+      updates.started_at = new Date().toISOString();
+    } else if (status === "completed") {
+      updates.ended_at = new Date().toISOString();
+      if (winnerVariant) {
+        updates.winner_variant = winnerVariant;
+      }
+    }
+
+    await withRetry(async () => {
+      if (status === "running") {
+        await getDb()`
+          UPDATE despun_ab_tests
+          SET status = ${status}, started_at = NOW(), updated_at = NOW()
+          WHERE id = ${testId}
+        `;
+      } else if (status === "completed") {
+        await getDb()`
+          UPDATE despun_ab_tests
+          SET status = ${status}, ended_at = NOW(), winner_variant = ${winnerVariant || null}, updated_at = NOW()
+          WHERE id = ${testId}
+        `;
+      } else {
+        await getDb()`
+          UPDATE despun_ab_tests
+          SET status = ${status}, updated_at = NOW()
+          WHERE id = ${testId}
+        `;
+      }
+    });
+    return true;
+  } catch (error) {
+    console.error("Failed to update A/B test status:", error);
+    return false;
+  }
+}
+
+export async function deleteABTest(testId: number): Promise<boolean> {
+  try {
+    await withRetry(async () => {
+      // Delete results first (foreign key)
+      await getDb()`DELETE FROM despun_ab_test_results WHERE test_id = ${testId}`;
+      // Then delete test
+      await getDb()`DELETE FROM despun_ab_tests WHERE id = ${testId}`;
+    });
+    return true;
+  } catch (error) {
+    console.error("Failed to delete A/B test:", error);
+    return false;
+  }
+}
+
+export async function getABTestById(testId: number): Promise<ABTest | null> {
+  try {
+    const [row] = await getDb()`
+      SELECT *
+      FROM despun_ab_tests
+      WHERE id = ${testId}
+    `;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      test_name: row.test_name,
+      test_description: row.test_description,
+      variants: row.variants,
+      target_metric: row.target_metric,
+      traffic_allocation: Number(row.traffic_allocation),
+      status: row.status,
+      started_at: row.started_at?.toISOString(),
+      ended_at: row.ended_at?.toISOString(),
+      winner_variant: row.winner_variant,
+      created_at: row.created_at?.toISOString(),
+      updated_at: row.updated_at?.toISOString(),
+    };
+  } catch (error) {
+    console.error("Failed to get A/B test:", error);
+    return null;
+  }
+}
+
 export async function getABTestResults(testId: number): Promise<ABTestResult[]> {
   try {
     const result = await getDb()`

@@ -19,16 +19,73 @@ const client = process.env.ANTHROPIC_API_KEY
 
 interface FeedSource {
   name: string;
-  lean: "Far Left" | "Left" | "Center" | "Right" | "Far Right";
+  lean: "Far Left" | "Left" | "Center-Left" | "Center" | "Center-Right" | "Right" | "Far Right";
   feedUrl: string;
 }
 
+// Sources across the political spectrum (48 sources, 7-point spectrum)
 const FEED_SOURCES: FeedSource[] = [
+  // Far Left (5)
   { name: "Jacobin", lean: "Far Left", feedUrl: "https://jacobin.com/feed" },
-  { name: "NPR", lean: "Left", feedUrl: "https://feeds.npr.org/1001/rss.xml" },
-  { name: "PBS", lean: "Center", feedUrl: "https://www.pbs.org/newshour/feeds/rss/headlines" },
+  { name: "The Intercept", lean: "Far Left", feedUrl: "https://theintercept.com/feed/?rss" },
+  { name: "Common Dreams", lean: "Far Left", feedUrl: "https://www.commondreams.org/rss.xml" },
+  { name: "Democracy Now", lean: "Far Left", feedUrl: "https://www.democracynow.org/democracynow.rss" },
+  { name: "The Nation", lean: "Far Left", feedUrl: "https://www.thenation.com/feed/?post_type=article" },
+
+  // Left (8)
+  { name: "The Guardian", lean: "Left", feedUrl: "https://www.theguardian.com/us-news/rss" },
+  { name: "HuffPost", lean: "Left", feedUrl: "https://www.huffpost.com/section/politics/feed" },
+  { name: "Vox", lean: "Left", feedUrl: "https://www.vox.com/rss/index.xml" },
+  { name: "Mother Jones", lean: "Left", feedUrl: "https://www.motherjones.com/feed/" },
+  { name: "Slate", lean: "Left", feedUrl: "https://slate.com/feeds/all.rss" },
+  { name: "MSNBC", lean: "Left", feedUrl: "https://www.msnbc.com/feeds/latest" },
+  { name: "The Daily Beast", lean: "Left", feedUrl: "https://feeds.thedailybeast.com/rss/articles" },
+  { name: "Salon", lean: "Left", feedUrl: "https://www.salon.com/feed/" },
+
+  // Center-Left (9)
+  { name: "NPR", lean: "Center-Left", feedUrl: "https://feeds.npr.org/1001/rss.xml" },
+  { name: "The Atlantic", lean: "Center-Left", feedUrl: "https://www.theatlantic.com/feed/all/" },
+  { name: "CNN", lean: "Center-Left", feedUrl: "http://rss.cnn.com/rss/cnn_topstories.rss" },
+  { name: "NBC News", lean: "Center-Left", feedUrl: "https://feeds.nbcnews.com/nbcnews/public/news" },
+  { name: "CBS News", lean: "Center-Left", feedUrl: "https://www.cbsnews.com/latest/rss/main" },
+  { name: "ABC News", lean: "Center-Left", feedUrl: "https://abcnews.go.com/abcnews/topstories" },
+  { name: "New York Times", lean: "Center-Left", feedUrl: "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml" },
+  { name: "Washington Post", lean: "Center-Left", feedUrl: "https://feeds.washingtonpost.com/rss/politics" },
+  { name: "Politico", lean: "Center-Left", feedUrl: "https://www.politico.com/rss/politicopicks.xml" },
+
+  // Center (9)
+  { name: "PBS NewsHour", lean: "Center", feedUrl: "https://www.pbs.org/newshour/feeds/rss/headlines" },
+  { name: "AP News", lean: "Center", feedUrl: "https://feedx.net/rss/ap.xml" },
+  { name: "Reuters", lean: "Center", feedUrl: "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best" },
+  { name: "The Hill", lean: "Center", feedUrl: "https://thehill.com/feed/" },
+  { name: "USA Today", lean: "Center", feedUrl: "https://rssfeeds.usatoday.com/usatoday-NewsTopStories" },
+  { name: "BBC News", lean: "Center", feedUrl: "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml" },
+  { name: "Axios", lean: "Center", feedUrl: "https://api.axios.com/feed/" },
+  { name: "Bloomberg", lean: "Center", feedUrl: "https://feeds.bloomberg.com/politics/news.rss" },
+  { name: "Business Insider", lean: "Center", feedUrl: "https://www.businessinsider.com/sai/rss" },
+
+  // Center-Right (3)
+  { name: "Wall Street Journal", lean: "Center-Right", feedUrl: "https://feeds.a.dj.com/rss/RSSOpinion.xml" },
+  { name: "The Economist", lean: "Center-Right", feedUrl: "https://www.economist.com/united-states/rss.xml" },
+  { name: "RealClearPolitics", lean: "Center-Right", feedUrl: "https://feeds.feedburner.com/realclearpolitics/qlMj" },
+
+  // Right (9)
   { name: "Fox News", lean: "Right", feedUrl: "https://moxie.foxnews.com/google-publisher/politics.xml" },
+  { name: "NY Post", lean: "Right", feedUrl: "https://nypost.com/feed/" },
+  { name: "Washington Examiner", lean: "Right", feedUrl: "https://www.washingtonexaminer.com/feed" },
+  { name: "Daily Wire", lean: "Right", feedUrl: "https://www.dailywire.com/feeds/rss.xml" },
+  { name: "The Federalist", lean: "Right", feedUrl: "https://thefederalist.com/feed/" },
+  { name: "Washington Times", lean: "Right", feedUrl: "https://www.washingtontimes.com/rss/headlines/news/politics/" },
+  { name: "The Blaze", lean: "Right", feedUrl: "https://www.theblaze.com/feeds/feed.rss" },
+  { name: "American Conservative", lean: "Right", feedUrl: "https://www.theamericanconservative.com/feed/" },
+  { name: "National Review", lean: "Right", feedUrl: "https://www.nationalreview.com/feed/" },
+
+  // Far Right (5)
   { name: "Breitbart", lean: "Far Right", feedUrl: "https://feeds.feedburner.com/breitbart" },
+  { name: "Newsmax", lean: "Far Right", feedUrl: "https://www.newsmax.com/rss/Newsfront/1/" },
+  { name: "Daily Caller", lean: "Far Right", feedUrl: "https://dailycaller.com/feed/" },
+  { name: "Gateway Pundit", lean: "Far Right", feedUrl: "https://www.thegatewaypundit.com/feed/" },
+  { name: "Epoch Times", lean: "Far Right", feedUrl: "https://www.theepochtimes.com/c-us/feed" },
 ];
 
 interface RawHeadline {
@@ -42,19 +99,23 @@ interface RawHeadline {
 
 async function fetchAllHeadlines(): Promise<RawHeadline[]> {
   const headlines: RawHeadline[] = [];
+  const seenUrls = new Set<string>();
 
   const results = await Promise.allSettled(
     FEED_SOURCES.map(async (source) => {
       try {
         const feed = await parser.parseURL(source.feedUrl);
-        return feed.items.slice(0, 5).map((item) => ({
-          source: source.name,
-          lean: source.lean,
-          title: item.title || "Untitled",
-          url: item.link || "",
-          snippet: item.contentSnippet || item.content || "",
-          publishedAt: item.pubDate || new Date().toISOString(),
-        }));
+        // Fetch ALL items from each feed (no slice limit)
+        return feed.items
+          .filter((item) => item.title && item.link)
+          .map((item) => ({
+            source: source.name,
+            lean: source.lean,
+            title: item.title || "Untitled",
+            url: item.link || "",
+            snippet: item.contentSnippet || item.content || "",
+            publishedAt: item.pubDate || new Date().toISOString(),
+          }));
       } catch (error) {
         console.error(`Failed to fetch ${source.name}:`, error);
         return [];
@@ -64,10 +125,17 @@ async function fetchAllHeadlines(): Promise<RawHeadline[]> {
 
   for (const result of results) {
     if (result.status === "fulfilled") {
-      headlines.push(...result.value);
+      for (const headline of result.value) {
+        // Deduplicate by URL
+        if (!seenUrls.has(headline.url)) {
+          seenUrls.add(headline.url);
+          headlines.push(headline);
+        }
+      }
     }
   }
 
+  console.log(`Fetched ${headlines.length} unique headlines from ${FEED_SOURCES.length} sources`);
   return headlines;
 }
 
