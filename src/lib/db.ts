@@ -53,25 +53,70 @@ export async function isDBAvailable(): Promise<boolean> {
   }
 }
 
-// Clearview cache storage
+// Clearview cache storage - supports tiered analysis (Deep Dive + Quick Take)
 export interface ClearviewStory {
   id: string;
   topic: string;
+  tier: "deep-dive" | "quick-take";
+  category: "politics" | "economy" | "international" | "tech" | "culture" | "other";
   summary: string;
-  whatHappened: string;
+  whatHappened?: string; // Deep Dive only
   sources: {
     name: string;
     lean: string;
     title: string;
     url: string;
     framing: string;
-    manipulationTechniques: string[];
+    manipulationTechniques?: string[]; // Deep Dive only
   }[];
   perspectives: {
     lean: string;
     viewpoint: string;
   }[];
   keyTakeaway: string;
+  // Deep Dive only fields
+  expertConsensus?: {
+    type: string;
+    exists: boolean;
+    statement?: string;
+    confidenceLevel: string;
+    sources?: string[];
+    dissent?: string;
+  };
+  debateType?: string;
+  debateQuestion?: string;
+  commonGround?: string[];
+  factualDisputes?: {
+    claim: string;
+    leftPosition: string;
+    rightPosition: string;
+    evidenceStatus: string;
+  }[];
+  whyItMatters?: {
+    left: {
+      coreValue: string;
+      motivation: string;
+      stance: string;
+      emotionalAppeal: string;
+    };
+    right: {
+      coreValue: string;
+      motivation: string;
+      stance: string;
+      emotionalAppeal: string;
+    };
+    bottomLine: string;
+  };
+  deeperAnalysis?: {
+    unstatedConcerns: {
+      left: string[];
+      right: string[];
+    };
+    economicDimension?: string;
+    culturalDimension?: string;
+    politicalGame: string;
+    whatGetsIgnored?: string;
+  };
 }
 
 export interface ClearviewCache {

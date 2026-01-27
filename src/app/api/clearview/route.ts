@@ -95,34 +95,37 @@ interface RawHeadline {
   publishedAt: string;
 }
 
+// Story analysis - full Deep Dive format
 interface StoryCluster {
   id: string;
   topic: string;
+  tier: "deep-dive" | "quick-take";
   summary: string;
-  whatHappened: string;
+  whatHappened?: string; // Deep Dive only
   sources: {
     name: string;
     lean: string;
     title: string;
     url: string;
     framing: string;
-    manipulationTechniques: string[];
+    manipulationTechniques?: string[]; // Deep Dive only
   }[];
   perspectives: {
     lean: string;
     viewpoint: string;
   }[];
   keyTakeaway: string;
-  // Expert consensus across domains
+  category: "politics" | "economy" | "international" | "tech" | "culture" | "other";
+  // Deep Dive only fields
   expertConsensus?: {
     type: "scientific" | "legal" | "historical" | "economic" | "intelligence" | "statistical" | "professional" | "international" | "none";
     exists: boolean;
     statement?: string;
     confidenceLevel: "high" | "moderate" | "low" | "contested";
     sources?: string[];
-    dissent?: string; // Notable dissenting views if any
+    dissent?: string;
   };
-  debateType: "factual" | "policy" | "values" | "mixed";
+  debateType?: "factual" | "policy" | "values" | "mixed";
   debateQuestion?: string;
   commonGround?: string[];
   factualDisputes?: {
@@ -131,13 +134,12 @@ interface StoryCluster {
     rightPosition: string;
     evidenceStatus: "supported" | "mixed" | "unsupported" | "misleading";
   }[];
-  // Political psychology context
   whyItMatters?: {
     left: {
-      coreValue: string; // The underlying value at stake (e.g., "equality", "protection")
-      motivation: string; // Plain-language explanation of why they care
-      stance: "offensive" | "defensive" | "mobilizing"; // Are they pushing change, defending status quo, or rallying base
-      emotionalAppeal: string; // What emotion this activates (fear, hope, anger, pride)
+      coreValue: string;
+      motivation: string;
+      stance: "offensive" | "defensive" | "mobilizing";
+      emotionalAppeal: string;
     };
     right: {
       coreValue: string;
@@ -145,18 +147,17 @@ interface StoryCluster {
       stance: "offensive" | "defensive" | "mobilizing";
       emotionalAppeal: string;
     };
-    bottomLine: string; // One sentence explaining the real fight
+    bottomLine: string;
   };
-  // Deeper analysis - what's really going on
   deeperAnalysis?: {
     unstatedConcerns: {
-      left: string[]; // Concerns driving the left that aren't openly discussed
-      right: string[]; // Concerns driving the right that aren't openly discussed
+      left: string[];
+      right: string[];
     };
-    economicDimension?: string; // Economic anxieties/interests at play
-    culturalDimension?: string; // Cultural/identity concerns beneath the surface
-    politicalGame: string; // How politicians/media exploit this for tribal gain
-    whatGetsIgnored?: string; // Solutions or nuances that don't fit the narrative
+    economicDimension?: string;
+    culturalDimension?: string;
+    politicalGame: string;
+    whatGetsIgnored?: string;
   };
 }
 
@@ -169,6 +170,8 @@ interface ArchivedBriefing {
 interface ClearviewResponse {
   success: boolean;
   stories: StoryCluster[];
+  deepDiveCount: number;
+  quickTakeCount: number;
   generatedAt: string;
   archived?: ArchivedBriefing[];
   error?: string;
@@ -185,7 +188,6 @@ async function fetchAllHeadlines(): Promise<RawHeadline[]> {
     FEED_SOURCES.map(async (source) => {
       try {
         const feed = await parser.parseURL(source.feedUrl);
-        // Fetch ALL items from each feed (no slice limit)
         return feed.items
           .filter((item) => item.title && item.link)
           .map((item) => ({
@@ -206,7 +208,6 @@ async function fetchAllHeadlines(): Promise<RawHeadline[]> {
   for (const result of results) {
     if (result.status === "fulfilled") {
       for (const headline of result.value) {
-        // Deduplicate by URL
         if (!seenUrls.has(headline.url)) {
           seenUrls.add(headline.url);
           headlines.push(headline);
@@ -219,14 +220,17 @@ async function fetchAllHeadlines(): Promise<RawHeadline[]> {
   return headlines;
 }
 
+// Enhanced cluster with metrics for tier selection
 interface HeadlineCluster {
   topic: string;
   headlineIndices: number[];
+  sourceCount: number;
+  spectrumSpread: number; // How many different political leans (1-7)
+  category: "politics" | "economy" | "international" | "tech" | "culture" | "other";
 }
 
 /**
- * Phase 1: Quick clustering of headlines into story groups
- * This is a cheap LLM call that just identifies which headlines belong together
+ * Phase 1: Cluster headlines with metrics for tier selection
  */
 async function clusterHeadlines(headlines: RawHeadline[]): Promise<HeadlineCluster[]> {
   if (!client) {
@@ -237,24 +241,34 @@ async function clusterHeadlines(headlines: RawHeadline[]): Promise<HeadlineClust
     .map((h, i) => `[${i}] ${h.source} (${h.lean}): "${h.title}"`)
     .join("\n");
 
-  const prompt = `Quickly group these news headlines into 3-5 major story clusters. Only include stories covered by 2+ sources.
+  const prompt = `Group these news headlines into story clusters. Include ALL stories with 2+ sources.
 
 Headlines:
 ${headlinesSummary}
+
+For each cluster, count:
+- sourceCount: total number of sources covering this story
+- spectrumSpread: how many DIFFERENT political leans are represented (1-7 scale, where 7 means coverage from Far Left to Far Right)
+- category: politics, economy, international, tech, culture, or other
 
 Respond with ONLY this JSON (no explanation):
 {
   "clusters": [
     {
       "topic": "Brief topic name",
-      "headlineIndices": [0, 5, 12]
+      "headlineIndices": [0, 5, 12],
+      "sourceCount": 6,
+      "spectrumSpread": 4,
+      "category": "politics"
     }
   ]
-}`;
+}
+
+Include ALL story clusters with 2+ sources. Do not limit to a specific number.`;
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 1000,
+    max_tokens: 2000,
     messages: [{ role: "user", content: prompt }],
   });
 
@@ -272,6 +286,60 @@ Respond with ONLY this JSON (no explanation):
   return parsed.clusters || [];
 }
 
+interface TieredClusters {
+  deepDives: HeadlineCluster[];
+  quickTakes: HeadlineCluster[];
+}
+
+/**
+ * Select which clusters get Deep Dive vs Quick Take treatment
+ */
+function selectTiers(clusters: HeadlineCluster[]): TieredClusters {
+  const deepDives: HeadlineCluster[] = [];
+  const quickTakes: HeadlineCluster[] = [];
+
+  // Sort by coverage score (sourceCount + spectrumSpread)
+  const sorted = [...clusters].sort((a, b) => {
+    const scoreA = a.sourceCount + a.spectrumSpread;
+    const scoreB = b.sourceCount + b.spectrumSpread;
+    return scoreB - scoreA;
+  });
+
+  for (const cluster of sorted) {
+    // Deep Dive if: sourceCount >= 4 AND spectrumSpread >= 3
+    if (cluster.sourceCount >= 4 && cluster.spectrumSpread >= 3) {
+      deepDives.push(cluster);
+    } else {
+      quickTakes.push(cluster);
+    }
+  }
+
+  // Category floor: ensure at least one Deep Dive (or promote top Quick Take) from key categories
+  const keyCategories: Array<"politics" | "economy" | "international"> = ["politics", "economy", "international"];
+
+  for (const category of keyCategories) {
+    const hasDeepDive = deepDives.some(c => c.category === category);
+    if (!hasDeepDive) {
+      // Find top Quick Take from this category to promote
+      const idx = quickTakes.findIndex(c => c.category === category);
+      if (idx !== -1) {
+        const promoted = quickTakes.splice(idx, 1)[0];
+        deepDives.push(promoted);
+        console.log(`Promoted "${promoted.topic}" to Deep Dive for category coverage (${category})`);
+      }
+    }
+  }
+
+  // Cap Deep Dives at 8 for cost control
+  if (deepDives.length > 8) {
+    const demoted = deepDives.splice(8);
+    quickTakes.unshift(...demoted);
+    console.log(`Demoted ${demoted.length} stories to Quick Take (cap at 8 Deep Dives)`);
+  }
+
+  return { deepDives, quickTakes };
+}
+
 interface ArticleWithMeta {
   source: string;
   lean: string;
@@ -282,15 +350,14 @@ interface ArticleWithMeta {
 }
 
 /**
- * Phase 2: Extract full articles for clustered headlines
+ * Extract full articles for Deep Dive clusters only
  */
-async function extractClusteredArticles(
+async function extractDeepDiveArticles(
   headlines: RawHeadline[],
   clusters: HeadlineCluster[]
 ): Promise<Map<string, ArticleWithMeta[]>> {
   const storyArticles = new Map<string, ArticleWithMeta[]>();
 
-  // Collect all URLs to extract
   const allUrls: string[] = [];
   const urlToHeadline = new Map<string, RawHeadline>();
 
@@ -306,12 +373,10 @@ async function extractClusteredArticles(
     }
   }
 
-  console.log(`Extracting ${allUrls.length} articles for ${clusters.length} story clusters...`);
+  console.log(`Extracting ${allUrls.length} articles for ${clusters.length} Deep Dive clusters...`);
 
-  // Extract all articles in parallel with concurrency limit
   const extractedArticles = await extractArticles(allUrls, 10);
 
-  // Organize by cluster
   for (const cluster of clusters) {
     const articles: ArticleWithMeta[] = [];
 
@@ -330,7 +395,7 @@ async function extractClusteredArticles(
           lean: headline.lean,
           title: headline.title,
           url: headline.url,
-          articleText: extracted.success ? extracted.text.slice(0, 8000) : "", // Limit to 8k chars per article
+          articleText: extracted.success ? extracted.text.slice(0, 8000) : "",
           extractionSuccess: extracted.success,
         });
       }
@@ -343,21 +408,27 @@ async function extractClusteredArticles(
 }
 
 /**
- * Phase 3: Detailed analysis with full article content
+ * Analyze Deep Dive stories with full article content
  */
-async function analyzeWithArticles(
-  storyArticles: Map<string, ArticleWithMeta[]>
+async function analyzeDeepDives(
+  storyArticles: Map<string, ArticleWithMeta[]>,
+  clusters: HeadlineCluster[]
 ): Promise<StoryCluster[]> {
-  if (!client) {
-    throw new Error("LLM not available");
+  if (!client || storyArticles.size === 0) {
+    return [];
   }
 
-  // Build the prompt with full article content
   let storySummaries = "";
   let storyIndex = 1;
 
+  // Create a map for quick category lookup
+  const categoryMap = new Map<string, string>();
+  for (const cluster of clusters) {
+    categoryMap.set(cluster.topic, cluster.category);
+  }
+
   for (const [topic, articles] of storyArticles) {
-    storySummaries += `\n=== STORY ${storyIndex}: ${topic} ===\n`;
+    storySummaries += `\n=== STORY ${storyIndex}: ${topic} (Category: ${categoryMap.get(topic) || "other"}) ===\n`;
 
     for (const article of articles) {
       storySummaries += `\n--- ${article.source} (${article.lean}) ---\n`;
@@ -373,101 +444,95 @@ async function analyzeWithArticles(
     storyIndex++;
   }
 
-  const prompt = `You are analyzing news articles from sources across the political spectrum. You have access to the FULL ARTICLE TEXT, not just headlines. Use this to provide deep, accurate analysis of how each source frames the story.
+  const prompt = `You are analyzing news articles from sources across the political spectrum. You have access to the FULL ARTICLE TEXT. Provide deep analysis of how each source frames each story.
 
 ${storySummaries}
 
-For each story, provide detailed analysis based on the ACTUAL ARTICLE CONTENT you've read. Pay attention to:
+For each story, provide detailed analysis based on the ACTUAL ARTICLE CONTENT. Pay attention to:
 - Specific language choices and loaded terms
 - What facts are emphasized vs minimized
 - What context is included vs omitted
 - The emotional tone and appeals used
-- Any manipulation techniques in the actual text
+- Manipulation techniques in the actual text
 
 Respond with this exact JSON structure:
 {
   "stories": [
     {
       "id": "story-1",
-      "topic": "Brief topic name (e.g., 'Immigration Policy Changes')",
-      "summary": "2-3 sentence neutral summary of what actually happened, just the facts",
-      "whatHappened": "Detailed explanation of the actual events, stripped of spin",
+      "topic": "Brief topic name",
+      "tier": "deep-dive",
+      "category": "politics|economy|international|tech|culture|other",
+      "summary": "2-3 sentence neutral summary of what actually happened",
+      "whatHappened": "Detailed explanation of actual events, stripped of spin",
       "sources": [
         {
           "name": "Source Name",
           "lean": "Political lean",
           "title": "Their headline",
           "url": "article url",
-          "framing": "How they're framing/spinning this story - cite specific passages",
+          "framing": "How they're framing this story - cite specific passages",
           "manipulationTechniques": ["technique1", "technique2"]
         }
       ],
       "perspectives": [
-        {
-          "lean": "Left",
-          "viewpoint": "How the left generally sees this issue and why"
-        },
-        {
-          "lean": "Right",
-          "viewpoint": "How the right generally sees this issue and why"
-        }
+        { "lean": "Left", "viewpoint": "How the left sees this and why" },
+        { "lean": "Right", "viewpoint": "How the right sees this and why" }
       ],
-      "keyTakeaway": "One sentence helping the reader understand the story without the spin",
+      "keyTakeaway": "One sentence helping reader understand without spin",
       "expertConsensus": {
         "type": "scientific|legal|historical|economic|intelligence|statistical|professional|international|none",
         "exists": true/false,
-        "statement": "What expert consensus says (if applicable)",
+        "statement": "What expert consensus says",
         "confidenceLevel": "high|moderate|low|contested",
-        "sources": ["CDC", "Supreme Court", "Bureau of Labor Statistics", "FBI/CIA", "historians", etc.],
-        "dissent": "Notable minority expert view if relevant"
+        "sources": ["relevant sources"],
+        "dissent": "Notable minority view if any"
       },
       "debateType": "factual|policy|values|mixed",
       "debateQuestion": "The actual question being debated",
       "commonGround": ["Facts both sides agree on"],
       "factualDisputes": [
         {
-          "claim": "The disputed claim",
-          "leftPosition": "What left-leaning sources claim",
-          "rightPosition": "What right-leaning sources claim",
+          "claim": "Disputed claim",
+          "leftPosition": "Left's claim",
+          "rightPosition": "Right's claim",
           "evidenceStatus": "supported|mixed|unsupported|misleading"
         }
       ],
       "whyItMatters": {
         "left": {
-          "coreValue": "The underlying value at stake",
-          "motivation": "Plain-language explanation of why this matters to them",
+          "coreValue": "Underlying value at stake",
+          "motivation": "Plain-language why this matters to them",
           "stance": "offensive|defensive|mobilizing",
-          "emotionalAppeal": "What emotion this activates"
+          "emotionalAppeal": "Emotion activated"
         },
         "right": {
-          "coreValue": "The underlying value at stake",
-          "motivation": "Plain-language explanation of why this matters to them",
+          "coreValue": "Underlying value at stake",
+          "motivation": "Plain-language why this matters to them",
           "stance": "offensive|defensive|mobilizing",
-          "emotionalAppeal": "What emotion this activates"
+          "emotionalAppeal": "Emotion activated"
         },
-        "bottomLine": "One sentence explaining what this fight is really about"
+        "bottomLine": "One sentence: what this fight is really about"
       },
       "deeperAnalysis": {
         "unstatedConcerns": {
-          "left": ["Concerns driving the left that aren't openly discussed"],
-          "right": ["Concerns driving the right that aren't openly discussed"]
+          "left": ["Unspoken concerns driving the left"],
+          "right": ["Unspoken concerns driving the right"]
         },
-        "economicDimension": "Economic anxieties and interests at play",
-        "culturalDimension": "Cultural/identity concerns beneath the surface",
-        "politicalGame": "How politicians and media are exploiting this issue",
-        "whatGetsIgnored": "Nuances, solutions, or common ground that gets ignored"
+        "economicDimension": "Economic interests at play",
+        "culturalDimension": "Cultural concerns beneath the surface",
+        "politicalGame": "How politicians/media exploit this",
+        "whatGetsIgnored": "Nuance and common ground that gets ignored"
       }
     }
   ]
 }
 
 CRITICAL:
-- Base your framing analysis on ACTUAL QUOTES and passages from the articles, not just headlines
-- Every story MUST include expertConsensus, whyItMatters, and deeperAnalysis
-- Be specific about manipulation techniques - cite examples from the text
-- If you couldn't read an article, note that and analyze based on the headline only`;
+- Base framing analysis on ACTUAL QUOTES from articles
+- Every story MUST include ALL fields shown above
+- Be specific about manipulation techniques - cite examples`;
 
-  // Use streaming for large responses
   let fullText = "";
   const stream = await client.messages.stream({
     model: "claude-sonnet-4-20250514",
@@ -483,14 +548,13 @@ CRITICAL:
 
   const jsonMatch = fullText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error("Failed to parse analysis");
+    throw new Error("Failed to parse Deep Dive analysis");
   }
 
   let parsed;
   try {
     parsed = JSON.parse(jsonMatch[0]);
   } catch (parseError) {
-    // Try to fix common JSON issues
     const fixedJson = jsonMatch[0]
       .replace(/,\s*}/g, '}')
       .replace(/,\s*]/g, ']')
@@ -499,21 +563,123 @@ CRITICAL:
     try {
       parsed = JSON.parse(fixedJson);
     } catch {
-      console.error("JSON parse failed. First 500 chars:", jsonMatch[0].slice(0, 500));
+      console.error("Deep Dive JSON parse failed");
       throw parseError;
     }
   }
 
-  const stories = parsed.stories || [];
-  const storiesWithWhy = stories.filter((s: { whyItMatters?: unknown }) => s.whyItMatters);
-  console.log(`Clearview: ${storiesWithWhy.length}/${stories.length} stories have whyItMatters`);
+  const stories = (parsed.stories || []).map((s: StoryCluster) => ({
+    ...s,
+    tier: "deep-dive" as const,
+  }));
 
+  console.log(`Analyzed ${stories.length} Deep Dive stories`);
+  return stories;
+}
+
+/**
+ * Analyze Quick Take stories (headlines only, lighter analysis)
+ */
+async function analyzeQuickTakes(
+  headlines: RawHeadline[],
+  clusters: HeadlineCluster[]
+): Promise<StoryCluster[]> {
+  if (!client || clusters.length === 0) {
+    return [];
+  }
+
+  let storySummaries = "";
+  let storyIndex = 1;
+
+  for (const cluster of clusters) {
+    storySummaries += `\n=== STORY ${storyIndex}: ${cluster.topic} (Category: ${cluster.category}) ===\n`;
+
+    for (const idx of cluster.headlineIndices) {
+      if (headlines[idx]) {
+        const h = headlines[idx];
+        storySummaries += `- ${h.source} (${h.lean}): "${h.title}" [${h.url}]\n`;
+      }
+    }
+    storyIndex++;
+  }
+
+  const prompt = `Provide brief analysis of these news stories based on HEADLINES ONLY. This is a Quick Take - be concise.
+
+${storySummaries}
+
+Respond with this JSON structure:
+{
+  "stories": [
+    {
+      "id": "story-1",
+      "topic": "Brief topic name",
+      "tier": "quick-take",
+      "category": "politics|economy|international|tech|culture|other",
+      "summary": "1-2 sentence neutral summary",
+      "sources": [
+        {
+          "name": "Source Name",
+          "lean": "Political lean",
+          "title": "Their headline",
+          "url": "article url",
+          "framing": "Brief note on how they're framing this (based on headline)"
+        }
+      ],
+      "perspectives": [
+        { "lean": "Left", "viewpoint": "Brief left perspective" },
+        { "lean": "Right", "viewpoint": "Brief right perspective" }
+      ],
+      "keyTakeaway": "One sentence summary without spin"
+    }
+  ]
+}
+
+Keep it brief - this is Quick Take analysis based on headlines only.`;
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 4000,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const content = response.content[0];
+  if (content.type !== "text") {
+    throw new Error("Unexpected response format");
+  }
+
+  const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("Failed to parse Quick Take analysis");
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch (parseError) {
+    const fixedJson = jsonMatch[0]
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*]/g, ']')
+      .replace(/[\x00-\x1F\x7F]/g, ' ');
+
+    try {
+      parsed = JSON.parse(fixedJson);
+    } catch {
+      console.error("Quick Take JSON parse failed");
+      throw parseError;
+    }
+  }
+
+  const stories = (parsed.stories || []).map((s: StoryCluster) => ({
+    ...s,
+    tier: "quick-take" as const,
+  }));
+
+  console.log(`Analyzed ${stories.length} Quick Take stories`);
   return stories;
 }
 
 export async function GET() {
   try {
-    // Check database cache first
     const dbAvailable = await isDBAvailable();
     let archived: ArchivedBriefing[] = [];
 
@@ -524,16 +690,20 @@ export async function GET() {
       if (cached && cached.stories.length > 0) {
         console.log("Returning cached Clearview data from DB");
 
-        // Also get archived stories
         const archivedData = await getArchivedClearviewData(cached.id);
         archived = archivedData.map(a => ({
           stories: a.stories,
           generatedAt: a.generatedAt,
         }));
 
+        const deepDiveCount = cached.stories.filter((s: { tier?: string }) => s.tier === "deep-dive").length;
+        const quickTakeCount = cached.stories.filter((s: { tier?: string }) => s.tier === "quick-take").length;
+
         return NextResponse.json({
           success: true,
           stories: cached.stories,
+          deepDiveCount,
+          quickTakeCount,
           generatedAt: cached.generatedAt,
           archived,
           cached: true,
@@ -541,7 +711,6 @@ export async function GET() {
       }
     }
 
-    // No cache - need to generate fresh content
     if (!client) {
       return NextResponse.json(
         { success: false, error: "Analysis service unavailable" },
@@ -561,19 +730,23 @@ export async function GET() {
       );
     }
 
-    // Phase 1: Quick clustering of headlines
-    console.log("Phase 1: Clustering headlines...");
+    // Phase 1: Cluster headlines with metrics
+    console.log("Phase 1: Clustering headlines with metrics...");
     const clusters = await clusterHeadlines(headlines);
-    console.log(`Found ${clusters.length} story clusters`);
+    console.log(`Found ${clusters.length} total story clusters`);
 
-    // Phase 2: Extract full articles for clustered stories
-    console.log("Phase 2: Extracting full articles...");
-    const storyArticles = await extractClusteredArticles(headlines, clusters);
+    // Phase 2: Select tiers
+    console.log("Phase 2: Selecting tiers...");
+    const { deepDives, quickTakes } = selectTiers(clusters);
+    console.log(`Selected ${deepDives.length} Deep Dives, ${quickTakes.length} Quick Takes`);
 
-    // Count successful extractions
+    // Phase 3: Extract articles for Deep Dives only
+    console.log("Phase 3: Extracting articles for Deep Dives...");
+    const deepDiveArticles = await extractDeepDiveArticles(headlines, deepDives);
+
     let successCount = 0;
     let totalCount = 0;
-    for (const articles of storyArticles.values()) {
+    for (const articles of deepDiveArticles.values()) {
       for (const article of articles) {
         totalCount++;
         if (article.extractionSuccess) successCount++;
@@ -581,16 +754,21 @@ export async function GET() {
     }
     console.log(`Extracted ${successCount}/${totalCount} articles successfully`);
 
-    // Phase 3: Detailed analysis with full article content
-    console.log("Phase 3: Analyzing with full article content...");
-    const stories = await analyzeWithArticles(storyArticles);
+    // Phase 4: Analyze both tiers (can run in parallel)
+    console.log("Phase 4: Analyzing stories...");
+    const [deepDiveStories, quickTakeStories] = await Promise.all([
+      analyzeDeepDives(deepDiveArticles, deepDives),
+      analyzeQuickTakes(headlines, quickTakes),
+    ]);
 
-    // Save to database for persistence
+    // Combine results: Deep Dives first, then Quick Takes
+    const allStories = [...deepDiveStories, ...quickTakeStories];
+
+    // Save to database
     if (dbAvailable) {
-      await saveClearviewData(stories);
+      await saveClearviewData(allStories);
       console.log("Saved Clearview data to DB");
 
-      // Get archived stories after saving
       const archivedData = await getArchivedClearviewData();
       archived = archivedData.map(a => ({
         stories: a.stories,
@@ -600,7 +778,9 @@ export async function GET() {
 
     const response: ClearviewResponse = {
       success: true,
-      stories,
+      stories: allStories,
+      deepDiveCount: deepDiveStories.length,
+      quickTakeCount: quickTakeStories.length,
       generatedAt: new Date().toISOString(),
       archived,
     };
