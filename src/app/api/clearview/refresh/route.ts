@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Parser from "rss-parser";
 import Anthropic from "@anthropic-ai/sdk";
 import { saveClearviewData, initClearviewTable, isDBAvailable } from "@/lib/db";
+import { extractArticles, ExtractedArticle } from "@/lib/extract";
 
 // This endpoint is called by Vercel Cron to refresh Clearview data
 // It bypasses the cache and always generates fresh content
@@ -97,6 +98,20 @@ interface RawHeadline {
   publishedAt: string;
 }
 
+interface HeadlineCluster {
+  topic: string;
+  headlineIndices: number[];
+}
+
+interface ArticleWithMeta {
+  source: string;
+  lean: string;
+  title: string;
+  url: string;
+  articleText: string;
+  extractionSuccess: boolean;
+}
+
 async function fetchAllHeadlines(): Promise<RawHeadline[]> {
   const headlines: RawHeadline[] = [];
   const seenUrls = new Set<string>();
@@ -135,11 +150,14 @@ async function fetchAllHeadlines(): Promise<RawHeadline[]> {
     }
   }
 
-  console.log(`Fetched ${headlines.length} unique headlines from ${FEED_SOURCES.length} sources`);
+  console.log(`Cron: Fetched ${headlines.length} unique headlines from ${FEED_SOURCES.length} sources`);
   return headlines;
 }
 
-async function clusterAndAnalyze(headlines: RawHeadline[]) {
+/**
+ * Phase 1: Quick clustering of headlines into story groups
+ */
+async function clusterHeadlines(headlines: RawHeadline[]): Promise<HeadlineCluster[]> {
   if (!client) {
     throw new Error("LLM not available");
   }
@@ -148,22 +166,143 @@ async function clusterAndAnalyze(headlines: RawHeadline[]) {
     .map((h, i) => `[${i}] ${h.source} (${h.lean}): "${h.title}"`)
     .join("\n");
 
-  const prompt = `You are analyzing today's news headlines from sources across the political spectrum to help readers understand what's actually happening vs how stories are being framed.
+  const prompt = `Quickly group these news headlines into 3-5 major story clusters. Only include stories covered by 2+ sources.
 
-Here are today's headlines:
-
+Headlines:
 ${headlinesSummary}
 
-Your task:
-1. Identify the TOP 3-5 major news stories that multiple sources are covering (group related headlines)
-2. For each story, provide:
-   - A neutral, factual summary of what actually happened
-   - How each source is framing/spinning the story
-   - What manipulation techniques (if any) each source is using
-   - The key perspectives from different political viewpoints
-   - CRITICAL: Identify if there's scientific/expert consensus on the underlying facts
-   - Distinguish between factual disputes vs policy/values debates
-   - WHY each side cares about this issue (psychological/political motivations)
+Respond with ONLY this JSON (no explanation):
+{
+  "clusters": [
+    {
+      "topic": "Brief topic name",
+      "headlineIndices": [0, 5, 12]
+    }
+  ]
+}`;
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1000,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const content = response.content[0];
+  if (content.type !== "text") {
+    throw new Error("Unexpected response format");
+  }
+
+  const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("Failed to parse clustering response");
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return parsed.clusters || [];
+}
+
+/**
+ * Phase 2: Extract full articles for clustered headlines
+ */
+async function extractClusteredArticles(
+  headlines: RawHeadline[],
+  clusters: HeadlineCluster[]
+): Promise<Map<string, ArticleWithMeta[]>> {
+  const storyArticles = new Map<string, ArticleWithMeta[]>();
+
+  // Collect all URLs to extract
+  const allUrls: string[] = [];
+  const urlToHeadline = new Map<string, RawHeadline>();
+
+  for (const cluster of clusters) {
+    for (const idx of cluster.headlineIndices) {
+      if (headlines[idx]) {
+        const headline = headlines[idx];
+        if (headline.url && !urlToHeadline.has(headline.url)) {
+          allUrls.push(headline.url);
+          urlToHeadline.set(headline.url, headline);
+        }
+      }
+    }
+  }
+
+  console.log(`Cron: Extracting ${allUrls.length} articles for ${clusters.length} story clusters...`);
+
+  // Extract all articles in parallel with concurrency limit
+  const extractedArticles = await extractArticles(allUrls, 10);
+
+  // Organize by cluster
+  for (const cluster of clusters) {
+    const articles: ArticleWithMeta[] = [];
+
+    for (const idx of cluster.headlineIndices) {
+      if (headlines[idx]) {
+        const headline = headlines[idx];
+        const extracted: ExtractedArticle = extractedArticles.get(headline.url) || {
+          title: headline.title,
+          text: "",
+          success: false,
+          error: "Not extracted",
+        };
+
+        articles.push({
+          source: headline.source,
+          lean: headline.lean,
+          title: headline.title,
+          url: headline.url,
+          articleText: extracted.success ? extracted.text.slice(0, 8000) : "", // Limit to 8k chars per article
+          extractionSuccess: extracted.success,
+        });
+      }
+    }
+
+    storyArticles.set(cluster.topic, articles);
+  }
+
+  return storyArticles;
+}
+
+/**
+ * Phase 3: Detailed analysis with full article content
+ */
+async function analyzeWithArticles(
+  storyArticles: Map<string, ArticleWithMeta[]>
+) {
+  if (!client) {
+    throw new Error("LLM not available");
+  }
+
+  // Build the prompt with full article content
+  let storySummaries = "";
+  let storyIndex = 1;
+
+  for (const [topic, articles] of storyArticles) {
+    storySummaries += `\n=== STORY ${storyIndex}: ${topic} ===\n`;
+
+    for (const article of articles) {
+      storySummaries += `\n--- ${article.source} (${article.lean}) ---\n`;
+      storySummaries += `Headline: "${article.title}"\n`;
+      storySummaries += `URL: ${article.url}\n`;
+
+      if (article.articleText) {
+        storySummaries += `Article Content:\n${article.articleText}\n`;
+      } else {
+        storySummaries += `[Article could not be extracted - analyze based on headline]\n`;
+      }
+    }
+    storyIndex++;
+  }
+
+  const prompt = `You are analyzing news articles from sources across the political spectrum. You have access to the FULL ARTICLE TEXT, not just headlines. Use this to provide deep, accurate analysis of how each source frames the story.
+
+${storySummaries}
+
+For each story, provide detailed analysis based on the ACTUAL ARTICLE CONTENT you've read. Pay attention to:
+- Specific language choices and loaded terms
+- What facts are emphasized vs minimized
+- What context is included vs omitted
+- The emotional tone and appeals used
+- Any manipulation techniques in the actual text
 
 Respond with this exact JSON structure:
 {
@@ -179,7 +318,7 @@ Respond with this exact JSON structure:
           "lean": "Political lean",
           "title": "Their headline",
           "url": "article url",
-          "framing": "How they're framing/spinning this story",
+          "framing": "How they're framing/spinning this story - cite specific passages",
           "manipulationTechniques": ["technique1", "technique2"]
         }
       ],
@@ -203,7 +342,7 @@ Respond with this exact JSON structure:
         "dissent": "Notable minority expert view if relevant"
       },
       "debateType": "factual|policy|values|mixed",
-      "debateQuestion": "The actual question being debated (e.g., 'Should vaccines be mandated?' not 'Are vaccines safe?')",
+      "debateQuestion": "The actual question being debated",
       "commonGround": ["Facts both sides agree on"],
       "factualDisputes": [
         {
@@ -215,108 +354,77 @@ Respond with this exact JSON structure:
       ],
       "whyItMatters": {
         "left": {
-          "coreValue": "The underlying value at stake (equality, fairness, protection, progress, etc.)",
-          "motivation": "Plain-language explanation of why this matters to them - write like you're explaining to a friend",
-          "stance": "offensive|defensive|mobilizing",
-          "emotionalAppeal": "What emotion this activates (fear, hope, anger, pride, moral outrage, etc.)"
-        },
-        "right": {
-          "coreValue": "The underlying value at stake (liberty, tradition, security, order, etc.)",
-          "motivation": "Plain-language explanation of why this matters to them - write like you're explaining to a friend",
+          "coreValue": "The underlying value at stake",
+          "motivation": "Plain-language explanation of why this matters to them",
           "stance": "offensive|defensive|mobilizing",
           "emotionalAppeal": "What emotion this activates"
         },
-        "bottomLine": "One sentence explaining what this fight is really about at its core"
+        "right": {
+          "coreValue": "The underlying value at stake",
+          "motivation": "Plain-language explanation of why this matters to them",
+          "stance": "offensive|defensive|mobilizing",
+          "emotionalAppeal": "What emotion this activates"
+        },
+        "bottomLine": "One sentence explaining what this fight is really about"
       },
       "deeperAnalysis": {
         "unstatedConcerns": {
-          "left": ["Concerns driving the left that aren't openly discussed - the quiet parts"],
-          "right": ["Concerns driving the right that aren't openly discussed - the quiet parts"]
+          "left": ["Concerns driving the left that aren't openly discussed"],
+          "right": ["Concerns driving the right that aren't openly discussed"]
         },
-        "economicDimension": "Economic anxieties and interests at play that don't fit neatly into the political framing",
-        "culturalDimension": "Cultural/identity concerns beneath the surface - what people feel but won't say",
-        "politicalGame": "How politicians and media are exploiting this issue for tribal gain - be honest and specific",
-        "whatGetsIgnored": "Nuances, solutions, or common ground that gets ignored because it doesn't fit the narrative"
+        "economicDimension": "Economic anxieties and interests at play",
+        "culturalDimension": "Cultural/identity concerns beneath the surface",
+        "politicalGame": "How politicians and media are exploiting this issue",
+        "whatGetsIgnored": "Nuances, solutions, or common ground that gets ignored"
       }
     }
   ]
 }
 
-CRITICAL GUIDELINES:
-- Only include stories covered by 2+ sources
-- Be genuinely neutral in your summaries
-- Identify manipulation techniques like: loaded language, fear-mongering, omission of context, false equivalence, appeal to emotion, etc.
-- Include the actual URLs from the headlines data
-- If a story only has one source, skip it
-- REQUIRED: Every story MUST include the expertConsensus object - never omit it
+CRITICAL:
+- Base your framing analysis on ACTUAL QUOTES and passages from the articles, not just headlines
+- Every story MUST include expertConsensus, whyItMatters, and deeperAnalysis
+- Be specific about manipulation techniques - cite examples from the text
+- If you couldn't read an article, note that and analyze based on the headline only`;
 
-EXPERT CONSENSUS RULES:
-- Identify the most relevant type of expert consensus for each story:
-  - "scientific": Medical, climate, physics, biology (sources: CDC, WHO, peer-reviewed journals)
-  - "legal": Constitutional law, court rulings (sources: Supreme Court, legal scholars, bar associations)
-  - "historical": What historians document happened (sources: historians, archives, documentation)
-  - "economic": Economic effects, trade, fiscal policy (sources: CBO, economists, Federal Reserve)
-  - "intelligence": National security, foreign interference (sources: FBI, CIA, DNI assessments)
-  - "statistical": Crime rates, demographics, measurable data (sources: BLS, Census, FBI UCR)
-  - "professional": Industry standards, best practices (sources: professional associations)
-  - "international": International law, treaties (sources: UN, ICC, international courts)
-  - "none": No clear expert domain applies or genuinely contested among experts
-- If experts broadly agree, set exists to true and state the consensus clearly
-- Include "dissent" only if there's a notable minority expert view worth mentioning
-- debateType should be:
-  - "factual" if the debate is about what happened/is true
-  - "policy" if the facts are agreed but the debate is about what to do
-  - "values" if it's about competing moral/ethical priorities
-  - "mixed" if it involves multiple types
-- For factualDisputes, honestly assess whether claims are supported by evidence
-- evidenceStatus "misleading" means the claim contains some truth but is framed deceptively
-- Don't create false balance: if one side's claims contradict expert consensus, say so
-
-WHY IT MATTERS - POLITICAL PSYCHOLOGY RULES:
-- REQUIRED: Every story MUST include the whyItMatters object
-- Write motivations in plain, accessible language - like explaining to a smart friend who doesn't follow politics
-- Use moral foundations theory as a guide:
-  - Left typically prioritizes: Care/Harm, Fairness/Equality, Liberty from oppression
-  - Right typically prioritizes: Loyalty/Tradition, Authority/Stability, Sanctity/Purity, Liberty from government
-- Stance meanings:
-  - "offensive" = They're pushing for change, trying to advance their position
-  - "defensive" = They're protecting something they feel is under threat
-  - "mobilizing" = They're rallying their base, making this a tribal identity issue
-- emotionalAppeal should identify the primary emotion being activated (fear, anger, hope, pride, disgust, moral outrage, anxiety, righteous indignation)
-- bottomLine should cut through the noise and state what this fight is REALLY about in one honest sentence
-- Be empathetic to both sides - help readers understand WHY reasonable people disagree, not just THAT they disagree
-
-DEEPER ANALYSIS - THE REAL GAME:
-- REQUIRED: Every story MUST include the deeperAnalysis object
-- unstatedConcerns: What's REALLY driving each side that they won't say openly?
-  - Left example: "Fear that enforcement is selectively racist" or "Worry that cruelty is the point"
-  - Right example: "Anxiety about cultural/demographic change" or "Feeling that elites dismiss their concerns"
-- economicDimension: What economic interests or anxieties are at play? Who gains, who loses economically?
-- culturalDimension: What identity/cultural anxieties exist beneath the policy debate? Be honest about what people feel but won't say
-- politicalGame: Be BLUNT about how politicians and media exploit this issue. Who benefits from keeping the fight going? Why doesn't it get solved?
-- whatGetsIgnored: What nuance, common ground, or practical solutions get ignored because they don't fit the tribal narrative?
-- Write this section like you're being brutally honest with a friend about how the game really works`;
-
-  const response = await client.messages.create({
+  // Use streaming for large responses
+  let fullText = "";
+  const stream = await client.messages.stream({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 8000,
+    max_tokens: 16000,
     messages: [{ role: "user", content: prompt }],
   });
 
-  const content = response.content[0];
-  if (content.type !== "text") {
-    throw new Error("Unexpected response format");
+  for await (const event of stream) {
+    if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+      fullText += event.delta.text;
+    }
   }
 
-  const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+  const jsonMatch = fullText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     throw new Error("Failed to parse analysis");
   }
 
-  const parsed = JSON.parse(jsonMatch[0]);
-  const stories = parsed.stories || [];
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch (parseError) {
+    // Try to fix common JSON issues
+    const fixedJson = jsonMatch[0]
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*]/g, ']')
+      .replace(/[\x00-\x1F\x7F]/g, ' ');
 
-  // Log which stories have whyItMatters
+    try {
+      parsed = JSON.parse(fixedJson);
+    } catch {
+      console.error("Cron: JSON parse failed. First 500 chars:", jsonMatch[0].slice(0, 500));
+      throw parseError;
+    }
+  }
+
+  const stories = parsed.stories || [];
   const storiesWithWhy = stories.filter((s: { whyItMatters?: unknown }) => s.whyItMatters);
   console.log(`Cron: ${storiesWithWhy.length}/${stories.length} stories have whyItMatters`);
 
@@ -340,7 +448,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    console.log("Cron: Starting Clearview refresh...");
+    console.log("Cron: Starting Clearview refresh with full article extraction...");
 
     if (!client) {
       return NextResponse.json(
@@ -361,7 +469,6 @@ export async function GET(request: NextRequest) {
 
     // Fetch headlines
     const headlines = await fetchAllHeadlines();
-    console.log(`Cron: Fetched ${headlines.length} headlines`);
 
     if (headlines.length < 5) {
       return NextResponse.json(
@@ -370,8 +477,29 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Generate fresh analysis
-    const stories = await clusterAndAnalyze(headlines);
+    // Phase 1: Quick clustering of headlines
+    console.log("Cron: Phase 1 - Clustering headlines...");
+    const clusters = await clusterHeadlines(headlines);
+    console.log(`Cron: Found ${clusters.length} story clusters`);
+
+    // Phase 2: Extract full articles for clustered stories
+    console.log("Cron: Phase 2 - Extracting full articles...");
+    const storyArticles = await extractClusteredArticles(headlines, clusters);
+
+    // Count successful extractions
+    let successCount = 0;
+    let totalCount = 0;
+    for (const articles of storyArticles.values()) {
+      for (const article of articles) {
+        totalCount++;
+        if (article.extractionSuccess) successCount++;
+      }
+    }
+    console.log(`Cron: Extracted ${successCount}/${totalCount} articles successfully`);
+
+    // Phase 3: Detailed analysis with full article content
+    console.log("Cron: Phase 3 - Analyzing with full article content...");
+    const stories = await analyzeWithArticles(storyArticles);
     console.log(`Cron: Generated ${stories.length} story clusters`);
 
     // Save to database
@@ -380,8 +508,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: "Clearview data refreshed",
+      message: "Clearview data refreshed with full article analysis",
       storiesCount: stories.length,
+      articlesExtracted: successCount,
+      articlesTotal: totalCount,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
